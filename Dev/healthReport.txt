@@ -1,0 +1,157 @@
+#!/bin/ksh
+
+#########Declaring Log and Report files###########
+Reportfile=/home/odadmind/DailyHealthReport
+Logfile=/home/odadmind/HealthCheck.log
+##################################################
+
+if [ -e "DailyHealthReport" ] ; then
+  rm "DailyHealthReport"
+  rm $Logfile
+fi
+
+touch "DailyHealthReport"
+chmod 777 "DailyHealthReport"
+
+touch $Logfile
+chmod 777 $Logfile
+
+cd /arsacif
+echo "===================================================================" >>$Reportfile
+echo "INITIATING HEALTH CHECK..." >>$Reportfile
+echo "===================================================================" >>$Reportfile
+echo "1. Files waiting at /arsacif: " >>$Reportfile
+echo "                        " >>$Reportfile
+find *.txt -type f ! -size 0 >>$Reportfile
+
+####Some comments if there are no files in queue##
+
+noFiles=`find *.txt -type f ! -size 0 | wc -l`
+if [ noFiles -eq 0 ] ; then
+   echo "--NONE--" >>$Reportfile
+fi
+if [ noFiles -ne 0 ] ; then
+   echo "                          " >>$Reportfile
+   echo $noFiles" file(s) in queue." >>$Reportfile
+fi
+
+#####################################################
+
+echo "-------------------------------------------------------------------" >>$Reportfile
+
+####DECLARING VARIABLES####
+dateToday=`date +"%Y%m%d"`  #e.g. 20170403
+dateForGrep=`date +"%b %d"`  #e.g. Apr 03
+#db2health=`db2_local_ps | wc -l`
+db2health=`ps -eaf | grep -i db2sysc | wc -l`
+#echo $dateForGrep
+searchPatternToday=$dateForGrep" 0"  #Concatenating to form the search pattern string
+#echo $searchPatternToday
+dateYesterday=`TZ=GMT+20 date +"%Y%m%d"`
+dateForGrepYesterday=`TZ=GMT+20 date +"%b %d"`
+filenameToday="/arsacif/bkupfiles/Files"$dateToday
+filenameYesterday="/arsacif/bkupfiles/Files"$dateYesterday
+#echo $dateYesterday
+#echo $dateForGrepYesterday
+searchPatternYesterday=$dateForGrepYesterday" 0"
+#echo $searchPatternYesterday
+
+
+
+echo "2. Files processed today/yesterday can be found at:" >>$Reportfile
+echo "--> "$filenameToday >>$Reportfile
+echo "--> "$filenameYesterday >>$Reportfile
+cd /arsacif/bkupfiles
+rm Files*
+if [ -e $filenameToday ] ; then
+   rm $filenameToday
+fi
+
+if [ -e $filenameYesterday ] ; then
+   rm $filenameYesterday
+fi
+
+
+ls -l | grep "$searchPatternToday" | cat >> $filenameToday
+ls -l | grep "$searchPatternYesterday" | cat >> $filenameYesterday
+cd ../gbkupfiles
+ls -l | grep "$searchPatternToday" | cat >> $filenameToday
+ls -l | grep "$searchPatternYesterday" | cat >> $filenameYesterday
+cd ../bkupfiles
+chmod 770 Files*
+
+echo "------------------------------------------------------------------" >>$Reportfile
+echo "3. Error(s) if any?" >>$Reportfile
+cd /arsacif/filestoload
+if [ -e *.Failed ] ; then
+  echo "-->****Errors found with the following EBCDIC files. Please use the logs(/arsacif/logs/arsload.logYYYYMMDDHHMMSS.txt) to research the issue: " >>$Reportfile
+  echo "       " `ls -m *.Failed` >>$Reportfile
+  echo "Erros found on EBCDIC files under /arsacif/filestoload, Hence Health Check Failing" >>$Logfile
+  exit 2
+fi
+
+if [ ! -e *.Failed ] ; then
+  echo "-->No errors found with EBCDIC files" >>$Reportfile
+  echo "-->No errors found with EBCDIC files" >>$Logfile
+fi
+echo "                                      " >>$Reportfile
+
+cd /arsacif/gfilestoload
+if [ -e *.Failed ] ; then
+  echo "-->****Errors found with the following Generic files. Please use the logs(/arsacif/logs/arsload.logYYYYMMDDHHMMSS.txt) to research the issue:  " >>$Reportfile
+  echo "       " `ls -m *.Failed` >>$Reportfile
+  echo "Erros found on Generic Files under /arsacif/gfilestoload, Hence Health Check Failing" >>$Logfile
+  exit 3
+fi
+
+if [ ! -e *.Failed ] ; then
+  echo "-->No errors found with Generic files" >>$Reportfile
+  echo "-->No errors found with Generic files" >>$Logfile
+fi
+
+echo "------------------------------------------------------------------" >>$Reportfile
+echo "4. Checking DB2 health..." >>$Reportfile
+if [ $db2health -gt 0 ] ; then
+    echo "-->DB2 is up and running. "$db2health" instance(s) of db2sysc are active." >>$Reportfile
+	echo "-->DB2 is up and running. "$db2health" instance(s) of db2sysc are active." >>$Logfile
+else
+if [ $db2health -eq 0 ] ; then
+   echo "-->DB2 seems to be down. Please validate." >>$Reportfile
+   echo "-->DB2 down and need immedidate attention,Hence Health Check is Failing" >>$Logfile
+   exit 4
+fi
+fi
+cd $HOME
+echo "-----------------------------------------------------------------" >>$Reportfile
+echo "5. Checking file system/storage utilization..." >>$Reportfile
+usage01=`df -g /arscache01 | awk 'NR > 1 {print $4}'`
+echo "--> Utilization on /arscache01 is: "$usage01 >>$Reportfile
+
+usage02=`df -g /arscache02 | awk 'NR > 1 {print $4}'`
+echo "--> Utilization on /arscache02 is: "$usage02 >>$Reportfile
+
+usageACIF=`df -g /arsacif | awk 'NR > 1 {print $4}' | cut -d"%" -f 1`
+echo "--> /arsacif utilization is at: "$usageACIF"%" >>$Reportfile
+if [ "$usageACIF" -gt 80 ] ; then
+
+  echo "Utilization has shot up above 80% on /arsacif. " >>$Reportfile
+  echo "Initiating cleanup of old files..." >>$Reportfile
+  sh /home/odadmind/doCleanup
+    echo "Utilization of /arsacif is >80%, doCleanup ran and Helath Check Failing:" >>$Logfile
+echo "                                                                  "
+usageACIF=`df -g /arsacif | awk 'NR > 1 {print $4}' | cut -d"%" -f 1`
+echo "--> Utilization at /arsacif after the cleanup(if applicable) is: "$usageACIF"%" >>$Reportfile
+echo "===================================================================" >>$Reportfile
+echo "HEALTH CHECK NOT COMPLETED DUE TO SPACE ISSUE,INVESTIGATE AND RERUN THE HEALTH CHECK." >>$Logfile
+echo "===================================================================" >>$Reportfile
+echo "                                                                 " >>$Reportfile
+exit 5
+else
+echo "===================================================================" >>$Reportfile
+echo "HEALTH CHECK COMPLETED." >>$Reportfile 
+echo "===================================================================" >>$Reportfile
+echo "--> /arsacif utilization is at: "$usageACIF"%" >>$Logfile
+echo "HELATH CHECK COMPLETED and NO ISSUES REPORTED" >>$Logfile
+exit 0
+ fi
+
